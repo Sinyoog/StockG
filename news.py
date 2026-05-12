@@ -2,11 +2,11 @@ import re
 from datetime import datetime, timedelta
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QLabel, QTableWidget, QTableWidgetItem, 
                              QHeaderView, QPushButton, QHBoxLayout, QMessageBox, QFrame, 
-                             QTextEdit, QLineEdit, QComboBox)
+                             QTextEdit, QLineEdit, QComboBox, QWidget)
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QFont
 
-# --- 공통 스타일 시트 (HTS 테마 강화) ---
+# --- 공통 스타일 시트 (HTS 테마) ---
 HTS_STYLE = """
     QDialog { background-color: #0d0d0d; color: #e0e0e0; font-family: 'Malgun Gothic'; }
     QLabel { color: #aaaaaa; }
@@ -38,77 +38,13 @@ HTS_STYLE = """
         padding: 5px; 
         selection-background-color: #004400;
     }
-    QTextEdit { background-color: #050505; border: 1px solid #222; color: #bbb; }
+    QTextEdit { background-color: #050505; border: 1px solid #222; color: #bbb; font-size: 13px; line-height: 150%; }
+    
+    #DetailFrame {
+        background-color: #0a0a0a;
+        border-left: 2px solid #00FF00;
+    }
 """
-
-class NewsDetailWindow(QDialog):
-    def __init__(self, ev, is_sub, parent=None):
-        super().__init__(parent)
-        self.ev = ev
-        self.is_sub = is_sub
-        self.setModal(False)
-        self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint)
-        self.setWindowTitle(f"상세 리포트 - {ev.get('target', '시장')}")
-        self.resize(550, 700)
-        self.setStyleSheet(HTS_STYLE)
-        self.init_ui()
-
-    def init_ui(self):
-        layout = QVBoxLayout()
-        layout.setContentsMargins(20, 20, 20, 20)
-
-        header = QLabel(f"● 문서 식별번호: {abs(id(self.ev)) % 1000000} | 분류: {self.ev.get('cat')}")
-        header.setStyleSheet("font-size: 11px; color: #555;")
-        layout.addWidget(header)
-
-        title = QLabel(self.ev.get('public', '데이터 정보 없음'))
-        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #00FF00; margin-top: 5px;")
-        title.setWordWrap(True)
-        layout.addWidget(title)
-
-        info_frame = QFrame()
-        info_frame.setStyleSheet("background: #111; border: 1px solid #222;")
-        info_lay = QVBoxLayout(info_frame)
-        
-        meta = self.ev.get('meta_ref', {})
-        body_txt = (f"■ 발행대상: {self.ev.get('target', '-')}\n"
-                    f"■ 기업규모: {meta.get('tier', '기타')}\n"
-                    f"■ 산업군: {meta.get('ind', '-')} ({meta.get('sub', '-')})\n"
-                    f"■ 발행주수: {self.ev.get('shares', 0):,} 주")
-        
-        info_label = QLabel(body_txt)
-        info_label.setStyleSheet("border: none; color: #999; line-height: 160%; font-size: 13px;")
-        info_lay.addWidget(info_label)
-        layout.addWidget(info_frame)
-
-        layout.addWidget(QLabel("◈ 상세 분석 내용"))
-        content_area = QTextEdit()
-        content_area.setReadOnly(True)
-        content_area.setText(self.ev.get('public'))
-        layout.addWidget(content_area)
-
-        # 프리미엄 섹션
-        premium_box = QFrame()
-        box_bg = "#051a05" if self.is_sub else "#111"
-        border_c = "#00FF00" if self.is_sub else "#333"
-        premium_box.setStyleSheet(f"background-color: {box_bg}; border: 1px solid {border_c}; border-radius: 4px;")
-        
-        pre_lay = QVBoxLayout(premium_box)
-        pre_title = QLabel("💎 프리미엄 독점 전략 데이터")
-        pre_title.setStyleSheet(f"font-weight: bold; color: {'#00FF00' if self.is_sub else '#555'}; border: none;")
-        pre_lay.addWidget(pre_title)
-
-        pre_content = QLabel(self.ev.get('premium', '분석 데이터가 존재하지 않습니다.') if self.is_sub else "프리미엄 구독 시 열람 가능한 보안 데이터입니다.")
-        pre_content.setStyleSheet("color: #ddd; border: none; font-size: 13px;")
-        pre_content.setWordWrap(True)
-        pre_lay.addWidget(pre_content)
-        layout.addWidget(premium_box)
-
-        btn_close = QPushButton("리포트 닫기")
-        btn_close.clicked.connect(self.close)
-        btn_close.setStyleSheet("background: #222; color: white; border: 1px solid #444; padding: 10px; font-weight: bold;")
-        layout.addWidget(btn_close)
-        self.setLayout(layout)
 
 class NewsWindow(QDialog):
     def __init__(self, hts_parent, engine, parent=None):
@@ -118,18 +54,19 @@ class NewsWindow(QDialog):
         self.all_events = [] 
         self.setModal(False)
         self.setWindowTitle("실시간 프리미엄 공시 분석 시스템 V12.5")
-        self.resize(1150, 800)
+        self.resize(1400, 850) 
         self.setStyleSheet(HTS_STYLE)
         self.init_ui()
         self.refresh_data()
 
     def init_ui(self):
-        layout = QVBoxLayout()
-        layout.setContentsMargins(15, 15, 15, 15)
+        # 메인 수직 레이아웃
+        main_v_layout = QVBoxLayout()
+        main_v_layout.setContentsMargins(10, 10, 10, 10)
 
-        # 상단 바 (구독 상태 및 버튼)
+        # 1. 상단 바 (구독 상태 및 버튼)
         top_bar = QFrame()
-        top_bar.setStyleSheet("background: #111; border-bottom: 2px solid #00FF00;")
+        top_bar.setStyleSheet("background: #111; border-bottom: 1px solid #333;")
         top_lay = QHBoxLayout(top_bar)
 
         self.status_label = QLabel()
@@ -159,9 +96,16 @@ class NewsWindow(QDialog):
         top_lay.addStretch()
         top_lay.addWidget(self.btn_buy)
         top_lay.addWidget(self.btn_cancel)
-        layout.addWidget(top_bar)
+        main_v_layout.addWidget(top_bar)
 
-        # 검색 영역
+        # 2. 중앙 본문 영역 (좌측 리스트 7 : 우측 상세 리포트 3)
+        content_layout = QHBoxLayout()
+        
+        # --- 좌측: 목록 영역 ---
+        left_widget = QWidget()
+        left_lay = QVBoxLayout(left_widget)
+        left_lay.setContentsMargins(0, 0, 0, 0)
+
         search_lay = QHBoxLayout()
         self.search_combo = QComboBox()
         self.search_combo.addItems(["전체 필터", "일자별", "구분별", "종목별", "내용 검색"])
@@ -173,109 +117,228 @@ class NewsWindow(QDialog):
         
         search_lay.addWidget(self.search_combo)
         search_lay.addWidget(self.search_input)
-        layout.addLayout(search_lay)
+        left_lay.addLayout(search_lay)
 
-        # 테이블 레이아웃
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["[ 일자 ]", "[ 구분 ]", "[ 대상/종목 ]", "[ 공시 데이터 요약 ]"])
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.setColumnWidth(0, 110)
-        self.table.setColumnWidth(1, 110)
-        self.table.setColumnWidth(2, 160)
-        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.table.cellDoubleClicked.connect(self.show_news_detail)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        # 클릭 시 상세 내용이 바뀌도록 연결
+        self.table.itemSelectionChanged.connect(self.update_detail_view)
         
-        layout.addWidget(self.table)
-        self.setLayout(layout)
+        left_lay.addWidget(self.table)
+        content_layout.addWidget(left_widget, 7)
+
+        # --- 우측: 상세 리포트 영역 ---
+        self.detail_frame = QFrame()
+        self.detail_frame.setObjectName("DetailFrame")
+        self.detail_lay = QVBoxLayout(self.detail_frame)
+        
+        self.det_header = QLabel("● 문서 정보 대기 중")
+        self.det_header.setStyleSheet("font-size: 11px; color: #555;")
+        
+        self.det_title = QLabel("공시를 선택하십시오")
+        self.det_title.setStyleSheet("font-size: 17px; font-weight: bold; color: #00FF00; margin-top: 5px;")
+        self.det_title.setWordWrap(True)
+        
+        self.det_meta_box = QFrame()
+        self.det_meta_box.setStyleSheet("background: #111; border: 1px solid #222; padding: 10px;")
+        self.det_meta_lay = QVBoxLayout(self.det_meta_box)
+        self.det_meta_label = QLabel("-")
+        self.det_meta_label.setStyleSheet("color: #999; font-size: 13px; border: none; line-height: 160%;")
+        self.det_meta_lay.addWidget(self.det_meta_label)
+        
+        self.det_content = QTextEdit()
+        self.det_content.setReadOnly(True)
+        
+        self.detail_lay.addWidget(self.det_header)
+        self.detail_lay.addWidget(self.det_title)
+        self.detail_lay.addWidget(QLabel("◈ 상세 분석 정보"))
+        self.detail_lay.addWidget(self.det_meta_box)
+        self.detail_lay.addWidget(QLabel("◈ 본문 내용"))
+        self.detail_lay.addWidget(self.det_content)
+        
+        content_layout.addWidget(self.detail_frame, 3)
+
+        main_v_layout.addLayout(content_layout)
+        self.setLayout(main_v_layout)
+
+    def update_detail_view(self):
+        selected_items = self.table.selectedItems()
+        if not selected_items: return
+        row = selected_items[0].row()
+        ev = self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+        
+        meta = ev.get('meta_ref', {})
+        
+        # 엔진의 SECTOR_MAP에 접근하기 위해 self.engine.SECTOR_MAP 사용
+        sector = getattr(self.engine, 'SECTOR_MAP', {}).get(meta.get('ind'), 'Growth')
+        
+        self.det_header.setText(f"● 문서 식별번호: {abs(id(ev)) % 1000000} | 분류: {ev.get('cat')}")
+        self.det_title.setText(f"< {ev.get('target')} >")
+        
+        # [수정] 금액이 0원일 경우 '산정 중' 표시 및 콤마 적용
+        m_cap = f"{ev.get('market_cap', 0):,}" if ev.get('market_cap', 0) > 0 else "데이터 분석 중"
+        s_price = f"{ev.get('start_price', 0):,}" if ev.get('start_price', 0) > 0 else "산정 중"
+        
+        report_text = (
+            f"상장일: {meta.get('listed_date', '-')} | 섹터: {sector}\n"
+            f"------------------------------------------\n"
+            f"[기업 정보]\n"
+            f"그룹: {meta.get('group', '독립')}\n"
+            f"규모: [{meta.get('tier', '기타')}]\n"
+            f"산업: {meta.get('ind', '-')} ({meta.get('sub', '-')})\n"
+            f"상태: {meta.get('char', 'Normal')}\n\n"
+            f"[발행 정보]\n"
+            f"주식수: {ev.get('shares', 0):,} 주\n"
+            f"시가총액: {m_cap} 원\n"
+            f"상장 시초가(예정): {s_price} 원\n"
+            f"------------------------------------------\n"
+            f"■ 공시 분석 내용:\n{ev.get('public')}"
+        )
+        self.det_content.setText(report_text)
 
     def is_currently_subscribed(self):
-        """[최종 보강] 어떤 상황에서도 결제 날짜가 남아있으면 구독 유지"""
-        # hts나 engine 객체 어디에든 날짜가 저장되어 있는지 확인
         b_date = getattr(self.hts, 'next_billing_date', None) or getattr(self.engine, 'next_billing_date', None)
-        
-        if not b_date: 
-            return False
-            
-        # 날짜 형식 변환 (문자열 로드 대응)
+        if not b_date: return False
         if isinstance(b_date, str):
-            try: 
-                b_date = datetime.strptime(b_date, '%Y-%m-%d').date()
-            except: 
-                return False
-        elif hasattr(b_date, 'date'): 
-            b_date = b_date.date()
-        
-        # 현재 날짜보다 결제 만료일이 크거나 같으면 무조건 TRUE
+            try: b_date = datetime.strptime(b_date, '%Y-%m-%d').date()
+            except: return False
+        elif hasattr(b_date, 'date'): b_date = b_date.date()
         return self.engine.current_date.date() <= b_date
 
     def refresh_data(self):
-        """데이터 갱신 로직 (최신 뉴스 1,000개 제한 최적화 적용)"""
-        # 1. 모든 누적 데이터를 가져옴
         self.all_events = self.get_all_cumulative_events()
-        
-        # 2. 최신순 정렬 (날짜 -> 카테고리 순)
         self.all_events.sort(key=lambda x: (x['date'], x['cat']), reverse=True)
+        if len(self.all_events) > 1000: self.all_events = self.all_events[:1000]
         
-        # [최적화 핵심] 데이터가 1,000개를 초과하면 최신순으로 1,000개만 남기고 삭제
-        # 이를 통해 2100년 시점의 수만 개 데이터를 전부 처리하는 부하를 방지합니다.
-        if len(self.all_events) > 1000:
-            self.all_events = self.all_events[:1000]
-        
-        # 3. 구독 유효 기간 및 연장 여부 확인
         is_sub = self.is_currently_subscribed()
         will_renew = getattr(self.hts, 'has_paid_news_access', False)
         
-        # 4. 상단 상태 표시줄 및 버튼 UI 업데이트 (한글화 유지)
         if is_sub:
             expire = self.hts.next_billing_date
             expire_str = expire.strftime('%Y-%m-%d') if hasattr(expire, 'strftime') else str(expire)
-            
             if will_renew:
                 self.status_label.setText(f"● 프리미엄 모드 활성 (차기 결제일: {expire_str})")
                 self.status_label.setStyleSheet("color: #00FF00; font-weight: bold; border: none;")
-                self.btn_buy.hide()
-                self.btn_cancel.show()
-                self.btn_cancel.setText("구독 해제")
+                self.btn_buy.hide(); self.btn_cancel.show()
             else:
                 self.status_label.setText(f"○ 라이선스 만료 예정: {expire_str}")
                 self.status_label.setStyleSheet("color: #FFA500; font-weight: bold; border: none;")
-                self.btn_buy.show()
-                self.btn_buy.setText("다시 구독")
-                self.btn_cancel.hide()
+                self.btn_buy.show(); self.btn_buy.setText("다시 구독"); self.btn_cancel.hide()
         else:
             self.status_label.setText("○ 일반 모드 (프리미엄 미가입)")
             self.status_label.setStyleSheet("color: #777; border: none;")
-            self.btn_buy.show()
-            self.btn_buy.setText("프리미엄 구독 (1,000,000원)")
-            self.btn_cancel.hide()
-
-        # 5. 기존 테이블 잔상 제거 후 데이터 출력
-        self.table.setRowCount(0)
+            self.btn_buy.show(); self.btn_buy.setText("프리미엄 구독 (1,000,000원)"); self.btn_cancel.hide()
         self.filter_table()
 
+    def filter_table(self):
+        idx = self.search_combo.currentIndex()
+        text = self.search_input.text().lower().strip()
+        is_sub = self.is_currently_subscribed()
+        
+        self.table.setRowCount(0)
+        filtered = []
+
+        for ev in self.all_events:
+            # 검색 대상 텍스트 설정
+            pub_content = ev.get('public', "").lower()
+            target_name = ev.get('target', "").lower()
+            category = ev.get('cat', "").lower()
+            date_str = ev.get('date', "").lower()
+            
+            match = False
+            if idx == 0: # 전체 필터
+                if text in date_str or text in category or \
+                   text in target_name or text in pub_content: match = True
+            elif idx == 1: # 일자별
+                if text in date_str: match = True
+            elif idx == 2: # 구분별
+                if text in category: match = True
+            elif idx == 3: # 종목별
+                if text in target_name: match = True
+            elif idx == 4: # 내용 검색
+                if text in pub_content: match = True
+            
+            if match:
+                filtered.append(ev)
+
+        self.table.setRowCount(len(filtered))
+        
+        for i, ev in enumerate(filtered):
+            # 요약 문구 생성
+            content = ev.get('public', "")
+            summary = content[:55] + "..." if len(content) > 55 else content
+            
+            row_data = [ev['date'], ev['cat'], ev['target'], summary]
+            
+            for j, val in enumerate(row_data):
+                it = QTableWidgetItem(str(val))
+                
+                # 정렬 설정
+                it.setTextAlignment(Qt.AlignmentFlag.AlignCenter if j < 3 else Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                
+                # [수정 포인트] 구독 상태일 때 색상 로직
+                if is_sub:
+                    if "💎" in ev['cat']: # 상장예고 항목은 밝은 초록색 (HTS 강조형)
+                        it.setForeground(QColor("#00FF00"))
+                    else: # 일반 상장 완료 등은 일반 흰색/회색 계열 유지 혹은 흐린 초록
+                        it.setForeground(QColor("#e0e0e0")) 
+                
+                # 핵심 데이터 저장 (클릭 시 우측 리포트 갱신용)
+                it.setData(Qt.ItemDataRole.UserRole, ev) 
+                self.table.setItem(i, j, it)
+
+    def show_toast_message(self, message):
+        """중앙에 메시지를 띄우고 1초 뒤에 삭제하는 토스트 알림 기능"""
+        from PyQt6.QtCore import QTimer
+        
+        # 메시지 라벨 생성
+        self.toast_label = QLabel(message, self)
+        self.toast_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        # 스타일 설정 (스크린샷 느낌의 어두운 배경 + 빨간 테두리/글씨)
+        self.toast_label.setStyleSheet("""
+            background-color: rgba(20, 0, 0, 230); 
+            color: #FF4444; 
+            border: 2px solid #FF4444; 
+            font-size: 20px; 
+            font-weight: bold; 
+            padding: 20px 40px;
+            border-radius: 5px;
+        """)
+        
+        # 위치 조정 (창 중앙)
+        self.toast_label.adjustSize()
+        x = (self.width() - self.toast_label.width()) // 2
+        y = (self.height() - self.toast_label.height()) // 2
+        self.toast_label.move(x, y)
+        self.toast_label.show()
+        
+        # 1초 뒤에 사라지게 함
+        QTimer.singleShot(1000, self.toast_label.deleteLater)
+
     def buy_paid_news(self):
-        """결제 시 hts와 engine 양쪽에 기록을 박아버림 (유실 방지)"""
         if not self.is_currently_subscribed():
+            # 잔액 검사 로직
             if self.hts.my_cash < 1000000:
-                return QMessageBox.warning(self, "잔액 부족", "계좌 잔액이 부족합니다.")
-            
+                # [수정] 경고창 대신 토스트 알림 호출
+                self.show_toast_message("잔액이 부족합니다")
+                return 
+
+            # 결제 진행
             self.hts.my_cash -= 1000000
-            
-            # 결제일 계산
             expiry = self.engine.current_date + timedelta(days=30)
             
-            # [중요] 두 곳 모두에 저장하여 데이터 유실 차단
+            # 데이터 동기화
             self.hts.next_billing_date = expiry
             self.engine.next_billing_date = expiry
-            
-            # 구독 스위치 강제 활성화
             self.hts.has_paid_news_access = True 
             self.engine.has_paid_news_access = True
             
+            self.show_toast_message("프리미엄 구독이 시작되었습니다")
         else:
-            # 기간 연장 또는 재활성화
             self.hts.has_paid_news_access = True 
             self.engine.has_paid_news_access = True
             
@@ -283,78 +346,62 @@ class NewsWindow(QDialog):
 
     def cancel_subscription(self):
         self.hts.has_paid_news_access = False
-        self.engine.has_paid_news_access = False # 해제 시점 기록
+        self.engine.has_paid_news_access = False
         self.refresh_data()
 
     def get_all_cumulative_events(self):
         cumulative = []
         curr_date = self.engine.current_date.date()
         is_sub = self.is_currently_subscribed()
-
+        
+        # 1. 상장 예정 리스트 (Pending)
         if is_sub and hasattr(self.engine, 'pending_listings'):
             for s in self.engine.pending_listings:
                 meta = s['meta']
                 listed_dt = datetime.strptime(meta['listed_date'], '%Y-%m-%d').date()
                 report_date = listed_dt - timedelta(days=7)
                 if curr_date >= report_date:
+                    # s(주식 데이터 전체)를 넘겨서 상세 정보가 추출되게 함
                     cumulative.append(self._create_ev(report_date, "💎 상장예고", meta, 
-                                                     f"[예고] {meta['c_name']} 신규 상장 예정 안내", 
-                                                     f"7일 후 본 시장에 신규 상장될 예정입니다. ({meta['listed_date']})", s))
+                                    f"[예고] {meta['c_name']} 신규 상장 예정 안내", s))
 
+        # 2. 기존 상장 종목
         for s in self.engine.stocks:
             meta = s['meta']
             listed_dt = datetime.strptime(meta['listed_date'], '%Y-%m-%d').date()
             if is_sub:
-                old_report_date = listed_dt - timedelta(days=7)
-                cumulative.append(self._create_ev(old_report_date, "💎 상장예고", meta, 
-                                                 f"[예고] {meta['c_name']} 상장 예정 안내", "7일 후 상장 예정 리포트", s))
+                cumulative.append(self._create_ev(listed_dt - timedelta(days=7), "💎 상장예고", meta, 
+                                f"[예고] {meta['c_name']} 상장 예정 리포트", s))
             if listed_dt <= curr_date:
                 cumulative.append(self._create_ev(listed_dt, "🚀 신규상장", meta, 
-                                                 f"[공시] {meta['c_name']} 기업 신규 상장 완료", "상장 직후 데이터 분석 완료", s))
+                                f"[공시] {meta['c_name']} 기업 신규 상장 완료", s))
         return cumulative
 
-    def _create_ev(self, dt, cat, meta, pub, pre, stock=None):
-        ev = {"date": dt.strftime('%Y-%m-%d'), "cat": cat, "target": meta['c_name'], "public": pub, "premium": pre, "meta_ref": meta}
-        if stock: ev.update({"shares": stock.get('shares', 0), "market_cap": stock.get('market_cap', 0)})
+    def _create_ev(self, dt, cat, meta, pub, stock=None):
+        # 1. 주식수 확보
+        shares = meta.get('shares', 0)
+        if shares <= 0 and stock:
+            shares = stock.get('shares', 0)
+        if shares <= 0: # 최후의 수단: 자산 기반 추정 (엔진 설정에 따라 조정)
+            shares = 50000000 
+
+        # 2. 주가 확보 (상장 예정가는 보통 assets / shares)
+        price = stock.get('price', 0) if stock else 0
+        if price <= 0:
+            assets = meta.get('assets', 0)
+            price = assets / max(1, shares)
+
+        # 3. 시가총액 산출
+        market_cap = stock.get('market_cap', 0) if stock else (price * shares)
+
+        ev = {
+            "date": dt.strftime('%Y-%m-%d'),
+            "cat": cat,
+            "target": meta['c_name'],
+            "public": pub,
+            "meta_ref": meta,
+            "shares": int(shares),
+            "market_cap": int(market_cap),
+            "start_price": int(price)
+        }
         return ev
-
-    def filter_table(self):
-        idx = self.search_combo.currentIndex()
-        text = self.search_input.text().lower().strip()
-        is_sub = self.is_currently_subscribed()
-        self.table.setRowCount(0)
-        filtered = []
-
-        for ev in self.all_events:
-            content = ev['premium'] if is_sub else ev['public']
-            match = False
-            if idx == 0: # 전체
-                if text in ev['date'].lower() or text in ev['cat'].lower() or \
-                   text in ev['target'].lower() or text in content.lower(): match = True
-            elif idx == 1: # 일자
-                if text in ev['date'].lower(): match = True
-            elif idx == 2: # 구분
-                if text in ev['cat'].lower(): match = True
-            elif idx == 3: # 종목
-                if text in ev['target'].lower(): match = True
-            elif idx == 4: # 내용
-                if text in content.lower(): match = True
-            if match: filtered.append((ev, content))
-
-        self.table.setRowCount(len(filtered))
-        for i, (ev, content) in enumerate(filtered):
-            summary = content[:55] + "..." if len(content) > 55 else content
-            row_data = [ev['date'], ev['cat'], ev['target'], summary]
-            for j, val in enumerate(row_data):
-                it = QTableWidgetItem(val)
-                it.setTextAlignment(Qt.AlignmentFlag.AlignCenter if j < 3 else Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-                if is_sub: it.setForeground(QColor("#00FF00"))
-                it.setData(Qt.ItemDataRole.UserRole, ev) 
-                self.table.setItem(i, j, it)
-
-    def show_news_detail(self, row, col):
-        it = self.table.item(row, 0)
-        if not it: return
-        ev = it.data(Qt.ItemDataRole.UserRole)
-        detail = NewsDetailWindow(ev, self.is_currently_subscribed(), self)
-        detail.show()
