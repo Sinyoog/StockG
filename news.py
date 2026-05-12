@@ -290,6 +290,32 @@ class NewsWindow(QDialog):
                 it.setData(Qt.ItemDataRole.UserRole, ev) 
                 self.table.setItem(i, j, it)
 
+    def generate_news_list(stock_engine):
+        news_list = []
+        current_date = stock_engine.current_date
+        
+        for stock in stock_engine.stocks:
+            # 1. 실적 발표 데이터 생성 체크 (D-Day 확인)
+            if stock.is_earnings_day(current_date):
+                stock_name = stock.name
+                
+                # --- 디버그 로그 추가 시작 ---
+                print(f"DEBUG: [Earnings News Generated for: {stock_name}]")
+                print(f"      - Net Income: {stock.last_net_income}")
+                print(f"      - Paid Access Status: {stock_engine.has_paid_news_access}")
+                # --- 디버그 로그 추가 끝 ---
+
+                # 뉴스 객체 생성 로직
+                content = f"[{stock_name}] 분기 실적 발표: "
+                if stock_engine.has_paid_news_access:
+                    content += f"당기순이익 {stock.last_net_income:,}원 달성"
+                else:
+                    content += "실적 수치는 프리미엄 구독자에게만 공개됩니다."
+                
+                news_list.append({"title": "기업 공시", "content": content, "type": "EARNINGS"})
+
+        return news_list
+
     def show_toast_message(self, message):
         """중앙에 메시지를 띄우고 1초 뒤에 삭제하는 토스트 알림 기능"""
         from PyQt6.QtCore import QTimer
@@ -351,30 +377,112 @@ class NewsWindow(QDialog):
 
     def get_all_cumulative_events(self):
         cumulative = []
-        curr_date = self.engine.current_date.date()
+        curr_dt_obj = self.engine.current_date
+        curr_date = curr_dt_obj.date()
         is_sub = self.is_currently_subscribed()
         
-        # 1. 상장 예정 리스트 (Pending)
-        if is_sub and hasattr(self.engine, 'pending_listings'):
+        # 1. [상장 예정 리스트] 아직 상장 안 된 대기 종목들 (pending_listings)
+        # 프리미엄 유저에게 상장 7일 전부터 "💎 상장예고"를 미리 보여줍니다.
+        if hasattr(self.engine, 'pending_listings') and self.engine.pending_listings:
             for s in self.engine.pending_listings:
-                meta = s['meta']
-                listed_dt = datetime.strptime(meta['listed_date'], '%Y-%m-%d').date()
-                report_date = listed_dt - timedelta(days=7)
-                if curr_date >= report_date:
-                    # s(주식 데이터 전체)를 넘겨서 상세 정보가 추출되게 함
-                    cumulative.append(self._create_ev(report_date, "💎 상장예고", meta, 
-                                    f"[예고] {meta['c_name']} 신규 상장 예정 안내", s))
+                try:
+                    meta = s.get('meta', {})
+                    l_date_str = meta.get('listed_date', '2000-01-01')
+                    listed_dt = datetime.strptime(l_date_str, '%Y-%m-%d').date()
+                    d_7_date = listed_dt - timedelta(days=7)
+                    
+                    if is_sub and curr_date >= d_7_date:
+                        cumulative.append(self._create_ev(
+                            d_7_date, "💎 상장예고", meta, 
+                            f"[예고] {meta.get('c_name')} 신규 상장 예정 안내", s
+                        ))
+                except: continue
 
-        # 2. 기존 상장 종목
+        # 2. [기존 종목 루프] 실적 및 상장 완료 처리
         for s in self.engine.stocks:
-            meta = s['meta']
-            listed_dt = datetime.strptime(meta['listed_date'], '%Y-%m-%d').date()
-            if is_sub:
-                cumulative.append(self._create_ev(listed_dt - timedelta(days=7), "💎 상장예고", meta, 
-                                f"[예고] {meta['c_name']} 상장 예정 리포트", s))
-            if listed_dt <= curr_date:
-                cumulative.append(self._create_ev(listed_dt, "🚀 신규상장", meta, 
-                                f"[공시] {meta['c_name']} 기업 신규 상장 완료", s))
+            try:
+                real_meta = s.get('meta', {}) if isinstance(s, dict) else getattr(s, 'meta', {})
+                c_name = real_meta.get('c_name', 'Unknown')
+                year_str = str(curr_dt_obj.year)
+                
+                # --- A. 상장 관련 공시 (누적 기록) ---
+                l_date_str = real_meta.get('listed_date', '2000-01-01')
+                listed_dt = datetime.strptime(l_date_str, '%Y-%m-%d').date()
+                
+                # [유료] 이미 상장된 종목의 '상장 예고' 기록도 리스트에 유지
+                if is_sub:
+                    cumulative.append(self._create_ev(
+                        listed_dt - timedelta(days=7), "💎 상장예고", real_meta, 
+                        f"[예고] {c_name} 상장 예정 리포트", s
+                    ))
+                
+                # [무료] 상장 완료 공시 (오늘 날짜가 상장일 이후면 상시 노출)
+                if listed_dt <= curr_date:
+                    cumulative.append(self._create_ev(
+                        listed_dt, "🚀 신규상장", real_meta, 
+                        f"[공시] {c_name} 기업 상장 완료", s
+                    ))
+
+                # --- B. 실적 공시 섹터 (예고 및 확정) ---
+                if 'report_day' in real_meta:
+                    y, m = curr_dt_obj.year, curr_dt_obj.month
+                    if m in [3, 4, 6, 7, 9, 10, 12, 1]:
+                        try:
+                            r_day = min(real_meta.get('report_day', 15), 28)
+                            report_dt = datetime(y, m, r_day).date()
+                            d_7_date = report_dt - timedelta(days=7)
+                            q_name = f"{(m-1)//3 + 1}분기" if m in [3, 6, 9, 12] else f"{(m-2)//3 + 1}분기"
+
+                            if curr_date >= d_7_date:
+                                # 상단 기업 정보를 가리기 위한 최소 메타
+                                news_meta = {'c_name': c_name}
+                                
+                                if is_sub:
+                                    data = real_meta.get('expected_earnings')
+                                    if not data:
+                                        data = {'revenue': real_meta.get('assets', 0) * 0.08, 'net_income': real_meta.get('assets', 0) * 0.005}
+                                    
+                                    ni = data.get('net_income', 0)
+                                    status = "흑자" if ni >= 0 else "적자"
+                                    content = (
+                                        f"분기: {q_name}\n"
+                                        f"공시일: {report_dt.strftime('%m월 %d일')}\n"
+                                        f"매출액: {data.get('revenue', 0):,.0f}원\n"
+                                        f"영업이익: {ni * 1.1:,.0f}원 ({status})\n"
+                                        f"당기순이익: {ni:,.0f}원 ({status})"
+                                    )
+                                    cat_name = "💎 실적예고(P)"
+                                else:
+                                    content = (
+                                        f"분기: {q_name}\n"
+                                        f"공시일: {report_dt.strftime('%m월 %d일')}\n"
+                                        f"------------------------------------------\n"
+                                        f"상세 지표는 프리미엄 전용입니다."
+                                    )
+                                    cat_name = "📊 실적예고"
+                                
+                                cumulative.append(self._create_ev(d_7_date, cat_name, news_meta, content, s))
+
+                            # 실제 확정 실적 발표 (history 참조)
+                            history = self.engine.earnings_history.get(c_name, {}).get(year_str, {})
+                            if q_name in history:
+                                h_data = history[q_name]
+                                h_ni = h_data.get('net_income', 0)
+                                h_status = "흑자" if h_ni >= 0 else "적자"
+                                h_content = (
+                                    f"분기: {q_name} (확정)\n"
+                                    f"발표일: {h_data.get('date', '당일')}\n"
+                                    f"매출액: {h_data.get('revenue', 0):,.0f}원\n"
+                                    f"영업이익: {h_data.get('op_income', 0):,.0f}원 ({h_status})\n"
+                                    f"당기순이익: {h_ni:,.0f}원 ({h_status})"
+                                )
+                                cumulative.append(self._create_ev(curr_date, "📢 실적공시", {'c_name': c_name}, h_content, s))
+                        except: pass
+
+            except: continue
+
+        # 최신순 정렬
+        cumulative.sort(key=lambda x: x['date'], reverse=True)
         return cumulative
 
     def _create_ev(self, dt, cat, meta, pub, stock=None):
