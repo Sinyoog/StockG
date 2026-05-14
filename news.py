@@ -478,23 +478,62 @@ class NewsWindow(QDialog):
         )
 
     def _make_earn_content(self, meta, y, q_name, data, mode, r_date=None):
-        # 실적 공시용 본문 (사용자 요청 포맷 반영)
-        m_cap = meta.get('market_cap', 0)
+        c_name = meta.get('c_name')
+        
+        # 1. 실제 데이터 금고(history)를 최우선 참조 (공시 당일 누락 방지)
+        real_data = self.engine.earnings_history.get(c_name, {}).get(str(y), {}).get(q_name)
+        target = real_data if real_data else data
+        
+        if not target:
+            return f"{q_name}\n실적 데이터를 불러오는 중..."
+
+        # 2. [핵심] 영업이익(Operating Income) 추출 경로 강화
+        # 엔진 내부에서 쓰일 수 있는 모든 키값을 순서대로 대조합니다.
+        rev = target.get('revenue') or target.get('rev', 0)
+        
+        # 영업이익: 연결재무제표 기준 모든 변수명 체크
+        op = (target.get('operating_income') or 
+              target.get('op_income') or 
+              target.get('op') or 
+              target.get('operatingIncome') or 0)
+              
+        ni = target.get('net_income') or target.get('ni', 0)
+
+        # 3. 전 분기 대비 매출액 증감 계산
+        def get_rev_diff():
+            q_idx = {"1분기": 0, "2분기": 1, "3분기": 2, "4분기": 3}[q_name]
+            p_y = y if q_idx > 0 else y - 1
+            p_q = ["1분기", "2분기", "3분기", "4분기"][q_idx - 1]
+            try:
+                p_data = self.engine.earnings_history.get(c_name, {}).get(str(p_y), {}).get(p_q)
+                if p_data:
+                    p_rev = p_data.get('revenue') or p_data.get('rev', 0)
+                    if p_rev > 0:
+                        diff = rev - p_rev
+                        return " (↑)" if diff > 0 else " (↓)" if diff < 0 else " (-)"
+            except: pass
+            return ""
+
+        # 4. 흑자/적자 상태 판별
+        def get_status(val):
+            if val > 0: return " (흑자)"
+            if val < 0: return " (적자)"
+            return " (보합)"
+
+        diff_arrow = get_rev_diff()
+        status_tag = "(확정)" if mode == "확정" else "(예고)"
+        date_label = "공시일" if mode == "확정" else "예상공시일"
+        d_val = target.get('date') or (r_date.strftime('%m월 %d일') if r_date else '당일')
+
+        # 5. 본문 조립 (사용자 요청 3줄 요약 포맷)
         return (
-            f"상장일: {meta.get('listed_date', '-')} | 섹터: {self.engine.SECTOR_MAP.get(meta.get('ind'), 'Growth')}\n"
-            f"------------------------------------------\n"
-            f"[기업 정보]\n"
-            f"그룹: {meta.get('group', '독립')} | 규모: [{meta.get('tier', '기타')}]\n"
-            f"산업: {meta.get('ind', '-')} ({meta.get('sub', '-')})\n\n"
-            f"[재무 분석 요약]\n"
-            f"당기순이익: {'분석 데이터 참조' if mode=='확정' else '분석 데이터 없음'}\n"
-            f"시가총액: {m_cap:,.0f} 원\n"
-            f"------------------------------------------\n"
             f"■ 공시 분석 내용:\n"
-            f"분기: {y}년 {q_name}{' (확정)' if mode=='확정' else ''}\n"
-            + (f"매출액: {data.get('revenue', 0):,.0f}원\n당기순이익: {data.get('net_income', 0):,.0f}원" if mode=="확정" and data 
-               else f"예상공시일: {r_date.strftime('%m월 %d일')}\n예상 매출액: {data.get('revenue', 0):,.0f}원\n예상 순이익: {data.get('net_income', 0):,.0f}원" if mode=="예고" 
-               else "데이터 취합 중...")
+            f"{q_name} {status_tag}\n"
+            f"{date_label}: {d_val}\n"
+            f"------------------------------------------\n"
+            f"매출액 : {rev:,.0f}원{diff_arrow}\n"
+            f"영업이익 : {op:,.0f}원{get_status(op)}\n"
+            f"당기순이익 : {ni:,.0f}원{get_status(ni)}"
         )
         
     def _create_ev(self, dt, cat, meta, pub, stock=None):

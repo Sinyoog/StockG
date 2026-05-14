@@ -925,127 +925,106 @@ class  StockGameEngine:
         return  final_name
   
     #  [로직  2]  실적  생성  엔진  (이자  비용  및  자산  반영)
-    def  announce_earnings(self,  s):
-        """[v41.1]  현실적  실적  엔진:  데이터  부재  방어  및  서프라이즈  로직  추가"""
-        from  datetime  import  datetime
-        import  random
-
-        meta  =  s['meta']
-        name  =  meta['c_name']
-        year  =  str(self.current_date.year)
-        month  =  self.current_date.month
-        quarter  =  {3:  "1분기",  4:  "1분기",  6:  "2분기",  7:  "2분기",  9:  "3분기",  10:  "3분기",  12:  "4분기",  1:  "4분기"}.get(month,  "수시")
-
-        #  [수정  1]  만약  expected_earnings가  없다면  즉시  생성  (에러  방지  핵심)
-        if  not  meta.get('expected_earnings'):
-                #  이전  대화에서  정의한  calculate_potential_earnings  또는  내부  계산  로직  호출
-                meta['expected_earnings']  =  self.calculate_potential_earnings(s)
-
-        #  1.  기초  데이터  및  날짜  객체  검증
-        ld  =  meta.get('listed_date_dt')
-        if  not  ld  or  isinstance(ld,  str):
-                try:
-                        ld  =  datetime.strptime(meta['listed_date'],  '%Y-%m-%d')
-                        meta['listed_date_dt']  =  ld
-                except  (KeyError,  ValueError):
-                        ld  =  self.current_date
-                        meta['listed_date_dt']  =  ld
-
-        age_days  =  (self.current_date  -  ld).days
-        tier  =  meta.get('tier',  '소형주')
+    def announce_earnings(self, s, year_str=None):
+        """[v41.2 수정] 연도 이월 버그 해결 및 상태 전환형 실적 오픈 엔진"""
+        meta = s['meta']
+        name = meta['c_name']
         
-        #  2.  매출  및  비용  계산
-        revenue  =  meta['assets']  *  random.uniform(0.04,  0.10)
-        base_cost  =  {"대형주":  0.015,  "중형주":  0.025,  "소형주":  0.04}.get(tier,  0.04)
+        # [수정] year_str이 인자로 들어오면 그 값을 쓰고, 없으면 현재 엔진 연도 사용
+        if year_str is None:
+            year_str = str(self.current_date.year)
+            
+        # [수정] 7월 "2_분기" 오타 수정 및 분기 매핑 정리
+        quarter_map = {
+            3: "1분기", 4: "1분기", 
+            6: "2분기", 7: "2분기", 
+            9: "3분기", 10: "3분기", 
+            12: "4분기", 1: "4분기"
+        }
+        quarter = quarter_map.get(self.current_date.month, "수시")
+
+        # 방어 로직: 장부가 없다면 생성
+        if not meta.get('expected_earnings'):
+            meta['expected_earnings'] = self.calculate_potential_earnings(s)
+
+        earning_data = meta['expected_earnings']
         
-        #  기술  도태  패널티
-        tech_penalty  =  0.0
-        if  getattr(self,  'max_tech_reached',  1)  >  1:
-                #  INDUSTRY_LEVELS  참조  시  에러  방지
-                ind_levels  =  getattr(self,  'INDUSTRY_LEVELS',  {}).get(meta['ind'],  {})
-                t1_subs  =  ind_levels.get(1,  [])
-                if  meta['sub']  in  t1_subs:
-                        tech_penalty  =  0.03
+        # 중복 공시 방지
+        if earning_data.get('status') == 'FIXED':
+            return True
 
-        #  3.  영업이익  및  순이익  (티어  보너스  포함)
-        tier_bonus  =  {"대형주":  0.02,  "중형주":  0.00,  "소형주":  -0.01}.get(tier,  0)
-        op_margin  =  meta['efficiency']  -  base_cost  +  tier_bonus  -  tech_penalty
-        op_income  =  revenue  *  op_margin
-        interest_cost  =  meta['assets']  *  (self.macro['interest_rate']  /  100)  *  0.01
-        net_income  =  op_income  -  interest_cost
+        # 상태를 FIXED로 변경하여 수치 오픈
+        earning_data['status'] = 'FIXED'
 
-        #  [수정  2]  실적  발표  효과  반영  (예측  대비  실제  결과)
-        expected  =  meta['expected_earnings']
-        
-        #  💡  [해결]  엔진용  키와  뉴스용  키  중  존재하는  것을  선택하여  에러  방지
-        exp_net  =  expected.get('expected_net_income')  or  expected.get('net_income')  or  1
-        actual_surprise  =  (net_income  /  max(1,  abs(exp_net)))
+        # 데이터 추출
+        revenue = earning_data['revenue']
+        op_income = earning_data['op_income']
+        net_income = earning_data['net_income']
 
-        #  예측치보다  잘  나왔을  경우  추가  모멘텀  반영
-        if  net_income  >  exp_net:  #  여기도  exp_net  변수로  수정
-                meta['momentum']  +=  0.05
+        # 자산 반영 및 리스크 관리
+        if net_income < 0:
+            meta['continuous_loss_count'] = meta.get('continuous_loss_count', 0) + 1
+            sensitivity = meta.get('risk_sensitivity', 1.0)
+            risk_up = (abs(net_income) / max(1, meta['assets'])) * 10 * sensitivity
+            meta['risk_score'] += risk_up
         else:
-                meta['momentum']  -=  0.05
+            meta['continuous_loss_count'] = 0
+            recovery = (net_income / max(1, meta['assets'])) * 10
+            meta['risk_score'] = max(0, meta['risk_score'] - recovery - 0.5)
 
-        #  4.  리스크  및  자산  업데이트
-        if  net_income  <  0:
-                meta['continuous_loss_count']  =  meta.get('continuous_loss_count',  0)  +  1
-                protection  =  0.2  if  age_days  <  1095  else  1.0
-                sensitivity  =  meta.get('risk_sensitivity',  1.0)
-                risk_up  =  (abs(net_income)  /  max(1,  meta['assets']))  *  10  *  sensitivity  *  protection
-                meta['risk_score']  +=  risk_up
-        else:
-                meta['continuous_loss_count']  =  0
-                recovery  =  (net_income  /  max(1,  meta['assets']))  *  10
-                meta['risk_score']  =  max(0,  meta['risk_score']  -  recovery  -  0.5)
-
-        #  5.  DB  기록
-        self.earnings_history.setdefault(name,  {}).setdefault(year,  {})[quarter]  =  {
-                "date":  self.current_date.strftime("%m월  %d일"),
-                "revenue":  revenue,  
-                "op_income":  op_income,
-                "net_income":  net_income,  
-                "is_surplus":  net_income  >  0,
-                "surprise":  "서프라이즈"  if  net_income  >  expected['expected_net_income']  else  "쇼크"
+        # [핵심 수정] 전달받은 year_str 금고에 정확히 기록
+        self.earnings_history.setdefault(name, {}).setdefault(year_str, {})[quarter] = {
+            "date": self.current_date.strftime("%m월 %d일"),
+            "revenue": revenue,  
+            "op_income": op_income,
+            "net_income": net_income,  
+            "is_surplus": net_income > 0,
+            "surprise": "공시 완료"
         }
         
-        #  자산에  실적  반영
-        meta['assets']  +=  net_income
-        
-        return  True
+        meta['assets'] += net_income
+        return True
 
     #  --  실적  미리  게산  --
-    def  calculate_potential_earnings(self,  s):
-        """실적  발표  7일  전  수치를  미리  계산하는  함수"""
-        import  random
-        meta  =  s['meta']
-        tier  =  meta.get('tier',  '소형주')
-      
-        #  매출  계산
-        revenue  =  meta['assets']  *  random.uniform(0.04,  0.10)
-      
-        #  비용  및  마진  계산  (대형/중형/소형  차등)
-        base_cost  =  {"대형주":  0.015,  "중형주":  0.025,  "소형주":  0.04}.get(tier,  0.04)
-        tier_bonus  =  {"대형주":  0.02,  "중형주":  0.00,  "소형주":  -0.01}.get(tier,  0)
-      
-        op_margin  =  meta['efficiency']  -  base_cost  +  tier_bonus
-        op_income  =  revenue  *  op_margin
-      
-        #  금리  반영  순이익  계산
-        interest_rate  =  self.macro.get('interest_rate',  4.0)
-        interest_cost  =  meta['assets']  *  (interest_rate  /  100)  *  0.01
-        net_income  =  op_income  -  interest_cost
-      
-        #  서프라이즈  지수  계산
-        expected_avg  =  revenue  *  0.03
-        surprise  =  net_income  /  expected_avg  if  expected_avg  !=  0  else  1.0
+    def calculate_potential_earnings(self, s):
+        import random
+        meta = s['meta']
+        tier = meta.get('tier', '소형주')
+        
+        # 1. 예고 시점에 실제 수치를 100% 최종 확정
+        revenue = meta['assets'] * random.uniform(0.04, 0.10)
+        base_cost = {"대형주": 0.015, "중형주": 0.025, "소형주": 0.04}.get(tier, 0.04)
+        tier_bonus = {"대형주": 0.02, "중형주": 0.00, "소형주": -0.01}.get(tier, 0)
+        
+        op_margin = meta['efficiency'] - base_cost + tier_bonus
+        op_income = revenue * op_margin
+        
+        interest_rate = self.macro.get('interest_rate', 4.0)
+        interest_cost = meta['assets'] * (interest_rate / 100) * 0.01
+        net_income = op_income - interest_cost
 
-        return  {
-            "revenue":  revenue,
-            "net_income":  net_income,                        #  뉴스  출력용  키
-            "expected_net_income":  net_income,      #  💡  엔진  계산용  키  추가
-            "surprise":  surprise,
-            "is_surplus":  net_income  >  0
+        # 2. UI(news.py)가 참조할 텍스트 리포트를 미리 가두기
+        quarter_name = {2: "1분기", 5: "2분기", 8: "3분기", 11: "4분기"}.get(self.current_date.month, "분기")
+        
+        pending_text = f"분기: {quarter_name}\n공시 예정일: {self.current_date + timedelta(days=7)}\n[실적 발표 예정 리포트]"
+        
+        fixed_text = (
+            f"분기: {quarter_name} (확정)\n"
+            f"발표일: {(self.current_date + timedelta(days=7)).strftime('%m월 %d일')}\n"
+            f"매출액: {int(revenue):,} 원\n"
+            f"영업이익: {int(op_income):,} 원\n"
+            f"당기순이익: {int(net_income):,} 원"
+        )
+
+        return {
+            "revenue": revenue,
+            "op_income": op_income,
+            "net_income": net_income,          
+            "expected_net_income": net_income, 
+            "is_surplus": net_income > 0,
+            "status": "PENDING",                # 초기 상태는 무조건 예고(PENDING)
+            "pending_text": pending_text,       # 예고 기간용 텍스트
+            "fixed_text": fixed_text            # 발표일 이후 공개용 텍스트
         }
 
     #  [로직  3]  실적  조회  시스템  (사용자  명령어용)
@@ -1938,124 +1917,121 @@ class  StockGameEngine:
           
             print("-"  *  165)
           
-    def  next_day(self,  silent=False):
-        import  math
-        import  random
-        from  datetime  import  timedelta
+    def next_day(self, silent=False):
+        import math
+        import random
+        from datetime import timedelta
 
-        #  1.  [날짜  및  시간  업데이트]
-        self.current_date  +=  timedelta(days=1)
-        self.virtual_weekday  =  (self.virtual_weekday  +  1)  %  7
-        self.is_market_open  =  self.virtual_weekday  <  5
+        # 1. [날짜 및 시간 업데이트] - 주말에도 날짜는 매일 흐릅니다.
+        self.current_date += timedelta(days=1)
+        self.virtual_weekday = (self.virtual_weekday + 1) % 7
+        self.is_market_open = self.virtual_weekday < 5
         
-        curr_date_obj  =  self.current_date.date()
-        current_month  =  self.current_date.month
-        cur_day  =  self.current_date.day
-        current_year_str  =  str(self.current_date.year)
+        current_month = self.current_date.month
+        cur_day = self.current_date.day
+        current_year_str = str(self.current_date.year)
 
-        #  2.  [기본  상태  초기화]
-        self.daily_news  =  []
-        self.daily_delist_count  =  0
-        self.silent_mode  =  silent
-        lv  =  self.get_tech_level()
+        # 2. [기본 상태 초기화]
+        self.daily_news = []
+        self.daily_delist_count = 0
+        self.silent_mode = silent
+        lv = self.get_tech_level()
         
-        if  self.scenario_timer  >  0:
-                self.scenario_timer  -=  1
+        if self.scenario_timer > 0:
+            self.scenario_timer -= 1
 
-        #  ---  [장이  열린  날에만  경제  연산  수행]  ---
-        if  self.is_market_open:
-                #  3.  [실적  시스템:  예약  및  데이터  생성]  -  뉴스  창에서  읽어갈  '재료'를  먼저  만듭니다.
-                for  s  in  self.stocks:
-                        meta  =  s['meta']
-                        
-                        #  [A]  분기별  실적  발표일  예약  (2,  5,  8,  11월)
-                        if  current_month  in  [2,  5,  8,  11]  and  cur_day  ==  1:
-                                meta['report_day']  =  random.randint(1,  28)
-                                meta['expected_earnings']  =  None  #  새  시즌  시작  시에만  초기화
-                        
-                        if  'report_day'  not  in  meta:
-                                meta['report_day']  =  random.randint(1,  28)
-
-                        #  [B]  실적  시즌(3,  6,  9,  12월)  데이터  주입
-                        if  current_month  in  [3,  6,  9,  12]:
-                                try:
-                                        #  이번  달  실적  발표  예정일  객체  생성
-                                        report_date  =  self.current_date.replace(day=meta['report_day']).date()
-                                        d_7_date  =  report_date  -  timedelta(days=7)
-
-                                        #  오늘이  D-7  구간  이후라면  데이터가  없을  때  즉시  생성  (뉴스  노출용)
-                                        if  curr_date_obj  >=  d_7_date:
-                                                if  not  meta.get('expected_earnings'):
-                                                        meta['expected_earnings']  =  self.calculate_potential_earnings(s)
-                                                        
-                                                        #  선반영  모멘텀  주입
-                                                        surprise  =  meta['expected_earnings'].get('surprise',  1.0)
-                                                        meta['momentum']  +=  max(-0.15,  min(0.12,  (surprise  -  1.0)  *  0.2))
-                                                        
-                                                        if  not  silent:
-                                                                print(f"DEBUG:  {meta['c_name']}  실적  데이터  긴급  복구  (발표일:  {meta['report_day']}일)")
-                                except  ValueError:
-                                        meta['report_day']  =  28
-
-                #  4.  [실적  시스템:  실제  실적  발표]
-                report_target_months  =  [3,  6,  9,  12,  1,  4,  7,  10]
-                if  current_month  in  report_target_months:
-                        q_map  =  {3:  "1분기",  4:  "1분기",  6:  "2분기",  7:  "2분기",  9:  "3분기",  10:  "3분기",  12:  "4분기",  1:  "4분기"}
-                        target_q  =  q_map.get(current_month,  "분기")
-                        
-                        for  s  in  self.stocks:
-                                meta  =  s['meta']
-                                history  =  self.earnings_history.setdefault(meta['c_name'],  {}).setdefault(current_year_str,  {})
-                                
-                                if  target_q  not  in  history:
-                                        is_report_month  =  current_month  in  [3,  6,  9,  12]
-                                        report_day  =  meta.get('report_day',  15)
-                                        
-                                        if  (is_report_month  and  cur_day  >=  report_day)  or  (not  is_report_month  and  cur_day  <=  5):
-                                                #  발표  시점에  데이터가  없으면  뉴스  창  에러  방지를  위해  즉시  생성
-                                                if  not  meta.get('expected_earnings'):
-                                                        meta['expected_earnings']  =  self.calculate_potential_earnings(s)
-                                                
-                                                #  실제  실적  확정  및  자산  반영
-                                                self.announce_earnings(s)
-                                                if  not  silent:
-                                                        self.daily_news.append(f"📊  [실적공시]  {self.CYAN}{meta['c_name']}{self.RESET}  {target_q}  발표")
-
-                #  5.  [기타  경제  엔진  가동]
-                self.handle_group_expansion(silent)
-                self.update_macro_logic()
-                self.apply_price_change()
-                self.update_company_technology()
-
-                #  6.  [데이터  업데이트  및  DB  저장]
-                date_str  =  self.current_date.strftime('%Y-%m-%d')
-                db_records  =  []
-                for  s  in  self.stocks:
-                        self.apply_stock_event(s,  silent)
-                        db_records.append((date_str,  s['meta']['c_name'],  int(s['price']),  int(s['market_cap'])))
-
-                try:
-                        cur  =  self.conn.cursor()
-                        cur.executemany("INSERT  INTO  stock_history  VALUES  (?,  ?,  ?,  ?)",  db_records)
-                        self.conn.commit()
-                except  Exception  as  e:
-                        print(f"❌  DB  저장  오류:  {e}")
-
-                self.check_delisting()
+        # ---------------------------------------------------------
+        # 3. [실적 시스템: 데이터 원천 확정] 
+        # 주말/평일 상관없이 1일에 실제 수치를 미리 금고(expected_earnings)에 박제합니다.
+        # 이 시점부터 news.py에서 클릭 시 '분석 중' 대신 확정 수치가 보입니다.
+        # ---------------------------------------------------------
+        if current_month in [2, 5, 8, 11] and cur_day == 1:
+            for s in self.stocks:
+                meta = s['meta']
+                # 실적 발표 예정일 랜덤 지정 (7~28일)
+                meta['report_day'] = random.randint(7, 28)
+                # 뉴스에 표시될 기준 날짜 고정
+                meta['earning_news_date'] = self.current_date.strftime('%Y-%m-%d')
+                # ★ 수치 100% 확정하여 가둠 (상태는 PENDING)
+                meta['expected_earnings'] = self.calculate_potential_earnings(s)
                 
-                #  지수  업데이트  및  상장  관리
-                wsi_multiplier  =  {1:  1.5,  2:  2.2,  3:  3.5,  4:  6.0}.get(lv,  3.5)
-                self.wsi  =  self.gri  *  wsi_multiplier  *  random.uniform(0.98,  1.02)
+                # 선반영 모멘텀 주입
+                is_surplus = meta['expected_earnings'].get('is_surplus', True)
+                meta['momentum'] += 0.05 if is_surplus else -0.05
+
+        # ---------------------------------------------------------
+        # 4. [실적 시스템: 실제 실적 공시] - 4분기 1월 쏠림 현상 해결
+        # ---------------------------------------------------------
+        # 1월(1)을 리포트 대상 달에서 완전히 삭제하여 1월 공시를 원천 차단합니다.
+        # ---------------------------------------------------------
+        # 4. [실적 시스템: 실제 실적 공시] - 12월 31일 폐장일 대응
+        # ---------------------------------------------------------
+        report_target_months = [3, 4, 6, 7, 9, 10, 12] 
+        if current_month in report_target_months:
+            q_map = {3: "1분기", 4: "1분기", 6: "2분기", 7: "2분기", 9: "3분기", 10: "3분기", 12: "4분기"}
+            target_q = q_map.get(current_month, "분기")
+            target_year_str = str(self.current_date.year)
+            
+            for s in self.stocks:
+                meta = s['meta']
+                history = self.earnings_history.setdefault(meta['c_name'], {}).setdefault(target_year_str, {})
                 
-                if  self.virtual_weekday  ==  0:
-                        self.handle_new_listings(silent)
-                self.reassign_tiers_by_cap(True)
+                if target_q not in history:
+                    report_day = meta.get('report_day', 15)
+                    
+                    # [핵심 로직] 12월의 경우
+                    if current_month == 12:
+                        # 24일~30일 사이이면서 '오늘이 마지막 영업일'이 될 가능성을 고려해
+                        # 24일 이후 장이 열린 날이라면 무조건 공시를 터뜨립니다.
+                        is_deadline = (cur_day >= 24)
+                    else:
+                        is_deadline = False
+                    
+                    if cur_day >= report_day or is_deadline:
+                        if self.is_market_open:
+                            # 12월 31일이 되기 전, 마지막으로 장이 열린 날(28, 29, 30일 중 하루)에 전부 실행됨
+                            self.announce_earnings(s, target_year_str) 
+                            if not silent:
+                                self.daily_news.append(f"📊 [실적공시] {self.CYAN}{meta['c_name']}{self.RESET} {target_q} 발표")
+
+        # --- [장이 열린 날에만 경제 연산 및 주가 변화 수행] ---
+        if self.is_market_open:
+            # 5. [경제 엔진 가동]
+            self.handle_group_expansion(silent)
+            self.update_macro_logic()
+            self.apply_price_change()
+            self.update_company_technology()
+
+            # 6. [데이터 업데이트 및 DB 저장]
+            date_str = self.current_date.strftime('%Y-%m-%d')
+            db_records = []
+            for s in self.stocks:
+                self.apply_stock_event(s, silent)
+                db_records.append((date_str, s['meta']['c_name'], int(s['price']), int(s['market_cap'])))
+
+            try:
+                cur = self.conn.cursor()
+                cur.executemany("INSERT INTO stock_history VALUES (?, ?, ?, ?)", db_records)
+                self.conn.commit()
+            except Exception as e:
+                print(f"❌ DB 저장 오류: {e}")
+
+            self.check_delisting()
+            
+            # 지수 업데이트
+            wsi_multiplier = {1: 1.5, 2: 2.2, 3: 3.5, 4: 6.0}.get(lv, 3.5)
+            self.wsi = self.gri * wsi_multiplier * random.uniform(0.98, 1.02)
+            
+            if self.virtual_weekday == 0:
+                self.handle_new_listings(silent)
+            self.reassign_tiers_by_cap(True)
 
         else:
-                if  not  silent:
-                        self.daily_news.append(f"💤  [휴장]  {self.current_date.strftime('%Y-%m-%d')}  주말입니다.")
+            # 주말/휴장 시 뉴스 출력
+            if not silent:
+                self.daily_news.append(f"💤 [휴장] {self.current_date.strftime('%Y-%m-%d')} 주말입니다.")
 
-        return  True
+        return True
   
     def  handle_group_expansion(self,  silent):
         """[v100.0]  그룹  통합  관리  엔진:  대공황  시  구조조정(삭제)  및  재건기  확장"""
