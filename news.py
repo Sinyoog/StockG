@@ -171,18 +171,33 @@ class NewsWindow(QDialog):
         row = selected_items[0].row()
         ev = self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
         
+        is_sub = self.is_currently_subscribed()
+        category = ev.get('cat', "")
+        
+        # 기본 정보 설정
+        self.det_header.setText(f"● 문서 식별번호: {abs(id(ev)) % 1000000} | 분류: {category}")
+        self.det_title.setText(f"< {ev.get('target')} >")
+
+        # 본문 내용 처리
+        raw_content = ev.get('public', "")
+        
+        # [핵심] 실적 예고(💎)인데 구독 중이 아닐 경우 내용 변조
+        if "💎" in category and "실적예고" in category and not is_sub:
+            # 수치 정보가 포함된 행들을 정규식이나 문자열 치환으로 가립니다.
+            display_content = (
+                "■ 공시 분석 내용:\n"
+                "------------------------------------------\n"
+                "해당 공시는 프리미엄 전용 분석 데이터입니다.\n"
+                "구독 시 상세 매출액 및 예상 영업이익 확인이 가능합니다.\n"
+                "------------------------------------------\n"
+                "[ 프리미엄 전용 열람 가능 ]"
+            )
+        else:
+            display_content = raw_content
+
+        # 상세 리포트 구성 (우측 섹션)
         meta = ev.get('meta_ref', {})
         sector = getattr(self.engine, 'SECTOR_MAP', {}).get(meta.get('ind'), 'Growth')
-        
-        # 실적 수치 포맷팅 (프리미엄 전용)
-        raw_income = ev.get('net_income')
-        if raw_income is not None:
-            income_display = f"{int(raw_income):,} 원" if self.is_currently_subscribed() else "구독 시 공개"
-        else:
-            income_display = "분석 데이터 없음"
-
-        self.det_header.setText(f"● 문서 식별번호: {abs(id(ev)) % 1000000} | 분류: {ev.get('cat')}")
-        self.det_title.setText(f"< {ev.get('target')} >")
         
         report_text = (
             f"상장일: {meta.get('listed_date', '-')} | 섹터: {sector}\n"
@@ -190,11 +205,7 @@ class NewsWindow(QDialog):
             f"[기업 정보]\n"
             f"그룹: {meta.get('group', '독립')} | 규모: [{meta.get('tier', '기타')}]\n"
             f"산업: {meta.get('ind', '-')} ({meta.get('sub', '-')})\n\n"
-            f"[재무 분석 요약]\n"
-            f"당기순이익: {income_display}\n"
-            f"시가총액: {ev.get('market_cap', 0):,} 원\n"
-            f"------------------------------------------\n"
-            f"■ 공시 분석 내용:\n{ev.get('public')}"
+            f"{display_content}"
         )
         self.det_content.setText(report_text)
 
@@ -235,13 +246,13 @@ class NewsWindow(QDialog):
     def filter_table(self):
         idx = self.search_combo.currentIndex()
         text = self.search_input.text().lower().strip()
-        is_sub = self.is_currently_subscribed()
+        is_sub = self.is_currently_subscribed() # 현재 구독 여부 확인
         
         self.table.setRowCount(0)
         filtered = []
 
+        # 1. 필터링 로직: 검색어와 콤보박스 선택에 따라 이벤트 선별
         for ev in self.all_events:
-            # 검색 대상 텍스트 설정
             pub_content = ev.get('public', "").lower()
             target_name = ev.get('target', "").lower()
             category = ev.get('cat', "").lower()
@@ -263,31 +274,38 @@ class NewsWindow(QDialog):
             if match:
                 filtered.append(ev)
 
+        # 2. 테이블 출력 로직
         self.table.setRowCount(len(filtered))
         
         for i, ev in enumerate(filtered):
-            # 요약 문구 생성
-            content = ev.get('public', "")
-            summary = content[:55] + "..." if len(content) > 55 else content
+            category = str(ev.get('cat'))
+            # 요약 문구 생성 (최대 55자)
+            summary = ev.get('public', "")[:55] + "..." if len(ev.get('public', "")) > 55 else ev.get('public', "")
             
-            row_data = [ev['date'], ev['cat'], ev['target'], summary]
+            row_data = [ev['date'], category, ev['target'], summary]
             
             for j, val in enumerate(row_data):
                 it = QTableWidgetItem(str(val))
                 
-                # 정렬 설정
+                # 기본 정렬 설정: 날짜/구분/종목은 중앙, 내용은 좌측 정렬
                 it.setTextAlignment(Qt.AlignmentFlag.AlignCenter if j < 3 else Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                 
-                # [수정 포인트] 구독 상태일 때 색상 로직
-                if is_sub:
-                    # 'cat' 대신 'target'이나 'summary'에도 💎가 포함될 수 있으므로 전체 체크
-                    if "💎" in str(ev.get('cat')):
-                        it.setForeground(QColor("#00FF00")) # 형광색 (상장예고)
+                # --- [핵심] 구독 상태별 색상 및 폰트 제어 로직 ---
+                if "💎" in category:
+                    if is_sub:
+                        # [프리미엄] 형광색(#00FF00) + 볼드체 적용
+                        it.setForeground(QColor("#00FF00")) 
                         it.setFont(QFont("Malgun Gothic", 9, QFont.Weight.Bold))
-                    elif "💀" in str(ev.get('cat')):
-                        it.setForeground(QColor("#FF4444")) # 빨간색 (상장폐지)
-                                
-                # 핵심 데이터 저장 (클릭 시 우측 리포트 갱신용)
+                    else:
+                        # [무료] 일반적인 흰색/회색(#dddddd) + 일반 폰트
+                        it.setForeground(QColor("#dddddd"))
+                        it.setFont(QFont("Malgun Gothic", 9, QFont.Weight.Normal))
+                
+                # 상장폐지(💀)는 구독 여부와 상관없이 항상 빨간색 강조
+                elif "💀" in category:
+                    it.setForeground(QColor("#FF4444"))
+                
+                # 아이템에 원본 데이터 저장 (클릭 시 상세 조회용)
                 it.setData(Qt.ItemDataRole.UserRole, ev) 
                 self.table.setItem(i, j, it)
 
@@ -436,13 +454,16 @@ class NewsWindow(QDialog):
                         d_7_date = report_dt - timedelta(days=7)
                         q_name = {3: "1분기", 6: "2분기", 9: "3분기", 12: "4분기"}[report_m]
 
+                        # [확정 공시]는 누구나 확인 가능
                         if report_dt <= curr_date:
                             history = self.engine.earnings_history.get(c_name, {}).get(str(y), {})
                             h_data = history.get(q_name)
                             cumulative.append(self._create_ev(report_dt, "📢 실적공시", meta, self._make_earn_content(meta, y, q_name, h_data, "확정"), s))
 
-                        if is_sub and d_7_date <= curr_date:
+                        # [실적 예고(💎)] - is_sub 체크를 제거하여 무료 사용자도 목록에 추가되게 함
+                        if d_7_date <= curr_date:
                             data = meta.get('expected_earnings', {})
+                            # 프리미엄 여부와 상관없이 일단 리스트에 추가
                             cumulative.append(self._create_ev(d_7_date, "💎 실적예고(P)", meta, self._make_earn_content(meta, y, q_name, data, "예고", report_dt), s))
                             
             except: continue
@@ -478,33 +499,42 @@ class NewsWindow(QDialog):
         )
 
     def _make_earn_content(self, meta, y, q_name, data, mode, r_date=None):
+        is_sub = self.is_currently_subscribed() # 현재 구독 상태 체크
         c_name = meta.get('c_name')
         
-        # 1. 실제 데이터 금고(history)를 최우선 참조 (공시 당일 누락 방지)
+        # 1. 실제 데이터 금고(history)를 최우선 참조
         real_data = self.engine.earnings_history.get(c_name, {}).get(str(y), {}).get(q_name)
         target = real_data if real_data else data
         
         if not target:
-            return f"{q_name}\n실적 데이터를 불러오는 중..."
+            return f"{q_name}\n데이터 분석 중입니다..."
 
-        # 2. [핵심] 영업이익(Operating Income) 추출 경로 강화
-        # 엔진 내부에서 쓰일 수 있는 모든 키값을 순서대로 대조합니다.
+        # [핵심] 실적 예고(mode == "예고")인데 구독 중이 아닐 경우 가리기
+        if mode == "예고" and not is_sub:
+            return (
+                f"■ 공시 분석 내용:\n"
+                f"{q_name} (예고)\n"
+                f"------------------------------------------\n"
+                f"해당 공시는 프리미엄 전용 분석 데이터입니다.\n"
+                f"구독 시 상세 매출액 및 예상 영업이익 확인이 가능합니다.\n"
+                f"------------------------------------------\n"
+                f"[ 프리미엄 전용 열람 가능 ]"
+            )
+
+        # 2. 데이터 추출 (구독 중이거나 확정 공시인 경우 실행)
         rev = target.get('revenue') or target.get('rev', 0)
-        
-        # 영업이익: 연결재무제표 기준 모든 변수명 체크
         op = (target.get('operating_income') or 
               target.get('op_income') or 
               target.get('op') or 
               target.get('operatingIncome') or 0)
-              
         ni = target.get('net_income') or target.get('ni', 0)
 
         # 3. 전 분기 대비 매출액 증감 계산
         def get_rev_diff():
-            q_idx = {"1분기": 0, "2분기": 1, "3분기": 2, "4분기": 3}[q_name]
-            p_y = y if q_idx > 0 else y - 1
-            p_q = ["1분기", "2분기", "3분기", "4분기"][q_idx - 1]
             try:
+                q_idx = {"1분기": 0, "2분기": 1, "3분기": 2, "4분기": 3}[q_name]
+                p_y = y if q_idx > 0 else y - 1
+                p_q = ["1분기", "2분기", "3분기", "4분기"][q_idx - 1]
                 p_data = self.engine.earnings_history.get(c_name, {}).get(str(p_y), {}).get(p_q)
                 if p_data:
                     p_rev = p_data.get('revenue') or p_data.get('rev', 0)
@@ -525,7 +555,7 @@ class NewsWindow(QDialog):
         date_label = "공시일" if mode == "확정" else "예상공시일"
         d_val = target.get('date') or (r_date.strftime('%m월 %d일') if r_date else '당일')
 
-        # 5. 본문 조립 (사용자 요청 3줄 요약 포맷)
+        # 5. 본문 조립
         return (
             f"■ 공시 분석 내용:\n"
             f"{q_name} {status_tag}\n"
