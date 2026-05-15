@@ -777,6 +777,10 @@ class StockHTS(QMainWindow):
         super().__init__()
         self.engine = StockGameEngine()
 
+        from news import NewsWindow
+        self.news_window = NewsWindow(self, self.engine, self)
+        self.news_window.hide()
+
         self.auto_speed_days = 1  # 기본값은 1일
         self.current_loop = 0
         self.is_auto_running = False
@@ -827,31 +831,21 @@ class StockHTS(QMainWindow):
             dialog.show()
 
     def open_news_window(self):
-        try:
+        if self.news_window:
+            # 1. 창을 화면에 표시
+            self.news_window.show()
+            # 2. 다른 창들보다 위로 올림
+            self.news_window.raise_()
+            # 3. 마우스 포커스를 이 창으로 가져옴
+            self.news_window.activateWindow()
+            # 4. 중요: 날짜가 바뀌었을 수 있으니 데이터를 새로고침 [필수]
+            self.news_window.refresh_data() 
+        else:
+            # 창이 아예 없을 때만 새로 생성
             from news import NewsWindow
-        except ImportError:
-            QMessageBox.critical(self, "파일 오류", "news.py 파일을 찾을 수 없습니다.")
-            return
-
-        # [수정] 이미 열려있는 뉴스창 인스턴스가 있는지 확인
-        existing_nw = next((d for d in self.active_dialogs if d.__class__.__name__ == "NewsWindow"), None)
-
-        if existing_nw:
-            try:
-                # 창이 존재하면 데이터를 새로고침하고 맨 앞으로 가져옴
-                existing_nw.refresh_data()
-                existing_nw.raise_()
-                existing_nw.activateWindow()
-                existing_nw.show()
-                return
-            except RuntimeError:
-                # 창이 파괴되었는데 리스트에 남아있는 경우 방어 로직
-                self.active_dialogs.remove(existing_nw)
-
-        # 새 창 생성
-        nw = NewsWindow(self, self.engine, self)
-        self.active_dialogs.append(nw)
-        nw.show()
+            # 부모를 None으로 주어야 좌측 상단에 박히지 않고 독립된 창이 됩니다.
+            self.news_window = NewsWindow(None, self.engine) 
+            self.news_window.show()
 
     def init_ui(self):
         self.setWindowTitle("G.PY Economic System Sync v10.0")
@@ -1082,49 +1076,53 @@ class StockHTS(QMainWindow):
             for st in self.engine.stocks: 
                 st['start_price'] = float(st['price'])
                 
-        # 2. 엔진 날짜 변경
+        # 2. 엔진 날짜 변경 및 상태 기록
         self.engine.next_day(silent=True)
         self.adjust_portfolio_for_splits()
         self.engine.record_current_state()
 
-        # 🚀 [결제 로직] 창을 갱신하기 전에 오늘이 결제일인지 먼저 체크
+        # 3. [결제 로직] 구독 자동 연장 체크
         curr_now = self.engine.current_date.date()
         bill_date = self.next_billing_date
 
         if bill_date:
-            # 날짜 객체 타입 정규화
             if isinstance(bill_date, str):
                 bill_date = datetime.strptime(bill_date, '%Y-%m-%d').date()
             elif hasattr(bill_date, 'date'):
                 bill_date = bill_date.date()
 
-            # 오늘이 결제일이거나 지났다면 (자동 연장 시점)
             if curr_now >= bill_date:
-                # 사용자가 '해지 예약'을 안 한 상태(has_paid_news_access == True)
                 if getattr(self, 'has_paid_news_access', False):
                     if self.my_cash >= 1000000:
                         self.my_cash -= 1000000
-                        # 📌 결제 성공: 오늘로부터 다시 30일 뒤로 결제일 연장
                         self.next_billing_date = self.engine.current_date + timedelta(days=30)
-                        # 엔진 데이터와도 동기화
                         self.engine.next_billing_date = self.next_billing_date
                         print(f"💰 [자동결제] 구독 갱신 완료. 다음 결제일: {self.next_billing_date.date()}")
                     else:
-                        # 돈 없으면 자동 해지
                         self.has_paid_news_access = False
                         self.engine.has_paid_news_access = False
                         print("⚠️ [자동결제] 잔액 부족으로 구독이 종료되었습니다.")
-                # 해지 예약 상태(False)라면 여기서 연장 로직이 실행되지 않아 자연스럽게 만료됨
 
-        # 3. 저장 로직
+        # 4. 저장 로직 (금요일인 경우 자동 저장)
         if self.engine.virtual_weekday == 4:
             self.engine.save_game(self.my_cash, self.my_portfolio)
         
-        # 4. UI 및 모든 활성 팝업 갱신 (결제가 완전히 끝난 뒤에 호출해야 함)
+        # 5. 메인 UI 갱신
         self.sync_ui_with_engine()
         
-        from news import NewsWindow 
+        # 6. [뉴스창 전용 갱신] - 닫힘 방지 및 실시간 업데이트
+        # 6. [강력 수정] 뉴스창 실시간 갱신 및 유지
+        if hasattr(self, 'news_window') and self.news_window:
+            try:
+                # 창이 살아있다면 갱신만 합니다. (close() 명령이 절대 들어가면 안 됨)
+                if self.news_window.isVisible():
+                    self.news_window.refresh_data()
+                    # 이 창을 최상단으로 한 번 더 고정해줍니다.
+                    self.news_window.raise_() 
+            except RuntimeError:
+                self.news_window = None
 
+        # 7. 기타 활성 팝업창 갱신 (리스트 기반)
         for dialog in self.active_dialogs[:]:
             try:
                 if not dialog or not dialog.isVisible():
@@ -1132,21 +1130,19 @@ class StockHTS(QMainWindow):
 
                 c_name = dialog.__class__.__name__
 
+                # [중요] 뉴스창은 위에서 별도로 처리하므로 리스트 루프에서는 완전히 제외
                 if c_name == "NewsWindow":
-                    if hasattr(dialog, 'refresh_data'):
-                        dialog.refresh_data()
-                elif c_name == "GroupInfoDialog":
+                    continue
+                
+                # 나머지 창들 갱신
+                if c_name == "GroupInfoDialog":
                     dialog.update_all_info()
                 elif c_name == "InfoTableDialog":
                     dialog.refresh_data()
                 elif c_name == "EarningsDialog":
                     dialog.load_cur()
                 elif c_name == "MyInvestmentDialog":
-                    if hasattr(self, '_calculate_assets'):
-                        total_eval, total_buy, total_prof, rate = self._calculate_assets()
-                        dialog.update_info(total_eval, total_prof, rate)
-                    else:
-                        dialog.update_info()
+                    dialog.update_info()
                 elif c_name == "TradeDialog":
                     dialog.update_info()
 
@@ -1180,53 +1176,63 @@ class StockHTS(QMainWindow):
 
     # ui.py 내 StockHTS 클래스 안의 함수
     def reset_game_logic(self):
-        """실제 초기화 수행 (DB, 파일, 메모리 변수, UI 잔상 전체 삭제)"""
-        # 1. 기존 데이터 및 세이브 파일 삭제
+        """기존 모든 초기화 기능 + 뉴스창 완전 초기화 및 동기화"""
+        
+        # 1. 뉴스창 완전 파괴 및 메모리 해제 (데이터 잔상 제거의 핵심)
+        if hasattr(self, 'news_window') and self.news_window:
+            try:
+                # 1. [방어] news.py 내부 로직이 메인 UI를 참조하지 못하게 연결을 먼저 끊음
+                self.news_window.hts = None 
+                
+                # 2. 창을 닫고 관리 리스트에서 제거
+                if self.news_window in self.active_dialogs:
+                    self.active_dialogs.remove(self.news_window)
+                
+                self.news_window.close()
+                self.news_window.deleteLater() # 메모리 해제 예약
+            except Exception as e:
+                print(f"⚠️ 뉴스창 종료 중 예외 무시: {e}")
+        
+        # 3. 메인 변수를 비워 새 엔진 연결 준비
+        self.news_window = None
+
+        # 2. 기존 데이터 및 세이브 파일 삭제 (유지)
         self.engine.clear_save_file()
         self.engine.clear_all_history()
         
-        # 2. 엔진 객체 새로 생성 및 시장 초기화
+        # 3. 엔진 객체 새로 생성 및 시장 초기화 (유지)
         self.engine = StockGameEngine()
         self.engine.initialize_market(silent=False)
         
-        # 3. 플레이어 자산 및 구독 정보 리셋 (메모리 변수)
+        # 4. 플레이어 자산 및 구독 정보 리셋 (유지)
         self.my_cash = 1000000 
         self.my_portfolio = {}
         self.selected_stock_name = "" 
+        self.has_paid_news_access = False   
+        self.next_billing_date = None       
+        self.engine.has_paid_news_access = False 
         
-        # 📌 구독제 관련 초기화 추가
-        self.has_paid_news_access = False   # 구독 권한 리셋
-        self.next_billing_date = None       # 구독 결제일 리셋
-        self.engine.has_paid_news_access = False # 엔진 내 권한 리셋 (동기화)
-        
-        # 4. UI 텍스트 및 패널 초기화
-        self.report_panel_text = ""
+        # 5. UI 및 차트 그래픽 초기화 (유지)
         self.report_panel.clear()
-        self.change_summary_label.clear()
-        self.curve.setData([]) # 차트 곡선 데이터 비우기
-        
-        # 5. 📌 차트 그래픽 잔상(최고/최저점 포인트 및 텍스트) 완벽 제거
+        self.curve.setData([]) 
         if hasattr(self, 'max_scatter'):
             try:
                 self.chart_widget.removeItem(self.max_scatter)
                 self.chart_widget.removeItem(self.min_scatter)
                 self.chart_widget.removeItem(self.max_text)
                 self.chart_widget.removeItem(self.min_text)
-            except:
-                pass # 이미 제거된 경우 무시
+            except: pass
         
-        # 6. 열려있는 모든 대화상자(뉴스, 역사관 등) 강제 종료 및 리스트 비우기
+        # 6. 기타 활성 대화상자 종료 및 리스트 완전 비우기 (유지)
         for d in self.active_dialogs[:]:
-            try:
-                d.close() # closeEvent를 통해 active_dialogs에서 자동 제거됨
-            except:
-                pass
+            try: d.close()
+            except: pass
         self.active_dialogs.clear()
         
-        # 7. UI 최종 동기화 (초기 상태 반영)
+        # 7. UI 최종 동기화 (유지)
         self.sync_ui_with_engine()
         
-        print("🚀 [시스템] 구독 정보, DB 히스토리 및 UI 잔상이 모두 초기화되었습니다.")
+        print("🚀 [시스템] 뉴스 데이터 잔상 포함 모든 정보가 완전 초기화되었습니다.")
 
     # --- [매매 로직] ---
     def handle_buy(self):
@@ -1373,88 +1379,6 @@ class StockHTS(QMainWindow):
             self.btn_nxt.setEnabled(True)
             self.is_auto_running = False
             print(f"🏁 {self.auto_speed_days}일간의 시뮬레이션이 완료되었습니다.")
-
-    def _run_next_day_logic(self):
-        # 1. 날짜를 넘기기 전에 기준가 업데이트
-        if self.engine.is_market_open:
-            for st in self.engine.stocks: 
-                st['start_price'] = float(st['price'])
-                
-        # 2. 엔진 날짜 변경
-        self.engine.next_day(silent=True)
-        self.adjust_portfolio_for_splits()
-        self.engine.record_current_state()
-
-        # 🚀 [구독 자동 결제 시스템] 
-        curr_now = self.engine.current_date.date()
-        bill_date = self.next_billing_date
-
-        if bill_date:
-            # 날짜 객체 타입 정규화
-            if isinstance(bill_date, str):
-                bill_date = datetime.strptime(bill_date, '%Y-%m-%d').date()
-            elif hasattr(bill_date, 'date'):
-                bill_date = bill_date.date()
-
-            # 📌 결제일 도달 시
-            if curr_now >= bill_date:
-                # 사용자가 '해지 예약'을 안 한 상태(has_paid_news_access == True)
-                if getattr(self, 'has_paid_news_access', False):
-                    if self.my_cash >= 1000000:
-                        self.my_cash -= 1000000
-                        # 30일 연장
-                        self.next_billing_date = self.engine.current_date + timedelta(days=30)
-                        # 🔥 핵심: 엔진의 구독 권한도 강제로 True 유지 (풀림 방지)
-                        self.engine.has_paid_news_access = True
-                        self.engine.next_billing_date = self.next_billing_date
-                        print(f"💰 [자동결제] 구독 갱신 성공. 다음 결제일: {self.next_billing_date.date()}")
-                    else:
-                        # 돈 없으면 종료
-                        self.has_paid_news_access = False
-                        self.engine.has_paid_news_access = False
-                        print("⚠️ [자동결제] 잔액 부족으로 구독이 만료되었습니다.")
-                else:
-                    # 해지 예약 상태였다면 여기서 권한 박탈
-                    self.engine.has_paid_news_access = False
-                    print("🚫 [구독] 해지 예약에 따라 프리미엄 서비스가 종료되었습니다.")
-
-        # 3. 저장 로직
-        if self.engine.virtual_weekday == 4:
-            self.engine.save_game(self.my_cash, self.my_portfolio)
-        
-        # 4. UI 및 모든 활성 팝업 갱신
-        self.sync_ui_with_engine()
-        
-        from news import NewsWindow 
-
-        for dialog in self.active_dialogs[:]:
-            try:
-                if not dialog or not dialog.isVisible():
-                    continue
-
-                c_name = dialog.__class__.__name__
-
-                if c_name == "NewsWindow":
-                    if hasattr(dialog, 'refresh_data'):
-                        dialog.refresh_data()
-                elif c_name == "GroupInfoDialog":
-                    dialog.update_all_info()
-                elif c_name == "InfoTableDialog":
-                    dialog.refresh_data()
-                elif c_name == "EarningsDialog":
-                    dialog.load_cur()
-                elif c_name == "MyInvestmentDialog":
-                    if hasattr(self, '_calculate_assets'):
-                        total_eval, total_buy, total_prof, rate = self._calculate_assets()
-                        dialog.update_info(total_eval, total_prof, rate)
-                    else:
-                        dialog.update_info()
-                elif c_name == "TradeDialog":
-                    dialog.update_info()
-
-            except Exception as e:
-                if dialog in self.active_dialogs:
-                    self.active_dialogs.remove(dialog)
 
     def sync_ui_with_engine(self):
         """엔진 데이터를 UI에 직접 동기화하고 활성 창을 갱신합니다."""
@@ -1872,26 +1796,48 @@ class StockHTS(QMainWindow):
         s = self.get_selected_stock_data()
         if not s: return
         m = s['meta']
+
+        # --- [1] 실시간 순위 계산 (에러 방어 로직 추가) ---
+        # 📌 get_stock_snapshots()에서 가져온 데이터 중 market_cap이 있는 것만 필터링하거나
+        # 📌 정렬 시 get() 메서드를 사용하여 에러를 방지합니다.
+        all_snaps = self.engine.get_stock_snapshots()
+        
+        # market_cap 키가 없는 종목은 0으로 취급하여 정렬 (KeyError 방지)
+        all_snaps.sort(key=lambda x: x.get('market_cap', 0), reverse=True)
+        
+        rank = 0
+        for i, snap in enumerate(all_snaps):
+            if snap.get('name') == m.get('c_name'):
+                rank = i + 1
+                break
+        # -----------------------------------------------
+
+        # --- [2] 투자유의/상폐위험 뱃지 생성 로직 ---
+        warning_badge = ""
+        is_warning_status = m.get('is_warning', False) or "WARNING" in str(m.get('char', ''))
+        
+        if is_warning_status:
+            if m.get('risk_score', 0) >= 100:
+                warning_badge = "<span style='background-color: #FF0000; color: white; padding: 2px 6px; border-radius: 3px; font-size: 13px; margin-left: 5px;'>🚨 상장폐지위험</span>"
+            else:
+                warning_badge = "<span style='background-color: #FFA500; color: black; padding: 2px 6px; border-radius: 3px; font-size: 13px; font-weight: bold; margin-left: 5px;'>⚠️ 투자경고</span>"
+
+        # --- [3] 데이터 정규화 및 HTML 구성 ---
         ts, os, fs, ins, rs = [m.get(k, 0)*100 for k in ['treasury_share', 'owner_share', 'foreign_share', 'inst_share', 'retail_share']]
         size = {"대형주": "[대기업]", "중형주": "[중견기업]", "소형주": "[중소기업]"}.get(m.get('tier', '소형주'), "[중소기업]")
         
-        # 100% 기준으로 비율 정규화
         total_share = ts + os + fs + ins + rs
         if total_share > 0:
-            ts_norm, os_norm, fs_norm, ins_norm, rs_norm = (
-                ts / total_share * 100,
-                os / total_share * 100,
-                fs / total_share * 100,
-                ins / total_share * 100,
-                rs / total_share * 100
-            )
+            ts_n, os_n, fs_n, ins_n, rs_n = (ts/total_share*100, os/total_share*100, fs/total_share*100, ins/total_share*100, rs/total_share*100)
         else:
-            ts_norm, os_norm, fs_norm, ins_norm, rs_norm = ts, os, fs, ins, rs
+            ts_n, os_n, fs_n, ins_n, rs_n = ts, os, fs, ins, rs
 
         report = f"""
         <div style='font-family: Malgun Gothic;'>
-            <h2 style='color:#00FF00; margin-bottom: 0px;'>&lt; {m['c_name']} &gt;</h2>
-            <p style='color:#888; font-size: 11px; margin-top: 2px;'>상장일: {m['listed_date']} | 섹터: {self.engine.SECTOR_MAP.get(m['ind'], 'Value')}</p>
+            <h2 style='color:#00FF00; margin-bottom: 0px;'>
+                <span style='color:#FFD700; font-size: 18px;'>[{rank}위]</span> &lt; {m['c_name']} &gt; {warning_badge}
+            </h2>
+            <p style='color:#888; font-size: 11px; margin-top: 5px;'>상장일: {m['listed_date']} | 섹터: {self.engine.SECTOR_MAP.get(m['ind'], 'Value')}</p>
             <hr style='border: 0.5px solid #333;'/>
             <p style='font-size: 13px;'>
                 <b>[기업 정보]</b><br/>
@@ -1908,9 +1854,9 @@ class StockHTS(QMainWindow):
             <hr style='border: 0.5px solid #333;'/>
             <p style='font-size: 13px;'>
                 <b>[지배구조]</b><br/>
-                자사주: {ts_norm:.1f}% | 대주주: {os_norm:.1f}%<br/>
-                외국인: {fs_norm:.1f}% | 기관 : {ins_norm:.1f}%<br/>
-                개인 : {rs_norm:.1f}%
+                자사주: {ts_n:.1f}% | 대주주: {os_n:.1f}%<br/>
+                외국인: {fs_n:.1f}% | 기관 : {ins_n:.1f}%<br/>
+                개인 : {rs_n:.1f}%
             </p>
             <p style='color: #FF4444; font-size: 14px;'><b>리스크: {m['risk_score']:.2f} / 150</b></p>
         </div>
